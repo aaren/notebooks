@@ -166,7 +166,7 @@ ylabel('horizontal position (mm)')
 
 That's pretty ideal.
 
-Let's apply it to everything and reshape the data.
+Let's apply it to everything and reshape the data:
 
 ```python
 t_ = r.t[valid] - front_time.reshape((1, -1, 1))
@@ -184,78 +184,28 @@ xlabel('time after front passage (s)')
 ylabel('horizontal position (mm)')
 ```
 
+Whilst this seems to give us what we want, we need to to a proper
+transform to get a regular grid with consistent limits over each of
+the axes.
+
+
 ### Transforming the data
 
-We need to interpolate this to a rectangular grid to make it sensible.
-
-#### Griddata
-
-```python
-import scipy.interpolate as interp
-
-# points to interpolate to
-xi = r.x[valid][0, :, 0]
-zi = r.z[valid][:, 0, 0]
-ti = np.linspace(-5, 20, 2500)
-
-Zi, Xi, Ti = np.meshgrid(zi, xi, ti, indexing='ij')
-
-X = r.x[valid]
-Z = r.z[valid]
-W = r.w[valid]
-
-T_ = t_
-
-interpolate_from = (Z.flatten(), X.flatten(), T_.flatten())
-data = W.flatten()
-interpolate_to = (Zi.flatten(), Xi.flatten(), Ti.flatten())
-
-Wi = interp.griddata(interpolate_from, data, interpolate_to, method='nearest')
-
-interp_shape = (len(zi), len(xi), len(ti))
-W_ = Wi.reshape(interp_shape)
-X_ = Xi.reshape(interp_shape)
-Z_ = Zi.reshape(interp_shape)
-T_ = Ti.reshape(interp_shape)
-```
-
-```python
-# front relative example
-example_fr_tz = s_[:, 50, :]
-example_fr_tx = np.s_[iz80, :, :]
-
-# mean over horizontal
-W_bar = np.mean(W_, axis=1)
-
-fig, axes = plt.subplots(nrows=3, figsize=(8, 6))
-axes[0].set_title(r'$w(t, x)$')
-axes[0].set_ylabel('horizontal (mm)')
-
-axes[1].set_title(r'$w(t, z)$')
-axes[1].set_ylabel('vertical (mm)')
-
-axes[2].set_title(r'$\barw_t(t, z)$')
-axes[2].set_ylabel('vertical (mm)')
-axes[2].set_xlabel('time after front passage (s)')
-
-c0 = axes[0].contourf(T_[example_fr_tx], X_[example_fr_tx], W_[example_fr_tx], levels=w_levels)
-c1 = axes[1].contourf(T_[example_fr_tz], Z_[example_fr_tz], W_[example_fr_tz], levels=w_levels)
-c2 = axes[2].contourf(T_[example_fr_tz], Z_[example_fr_tz], W_bar, levels=w_levels)
-```
-
-#### Map coordinates
-
-I have a feeling that we don't need to use griddata for this
-interpolation. As the data starts off on a rectangular grid and we
-want to finish on a rectangular grid, `scipy.ndimage.map_coordinates`
-should be applicable.
+We need to interpolate this to a rectangular grid to make it
+sensible. Since our original data is on a regular grid we can use
+`scipy.ndimage.map_coordinates` to do this. All we have to do is
+workout what the time coordinates are of the front relative system.
+The $(x, z)$ coordinates remain the same.
 
 `map_coordinates` takes an input array and an array of coordinates
 as arguments, and returns the input array evaluated at the
 coordinates (in array space).
 
+*You can essentially think of map_coordinates as a way to index an
+array with non integer indices.*
+
 The shape of the output is determined by dropping the first axis of
-the coordinates, i.e. coordinates must have shape (ndim, ...).
+the coordinates, i.e. coordinates must have shape (ndim, output_shape).
 
 Here's a simple example where we get output == input:
 
@@ -267,24 +217,13 @@ out = ndi.map_coordinates(a, np.indices(a.shape))
 assert((out == a).all())
 ```
 
-*Essentially, you can think of map coordinates as a way to index an
-array with non integer indices.*
-
 In our case we want to sample the original data over the original x
-and z, but with a time sampling from $t_f$ to $t_f + t_1$.
+and z, but with a time sampling from $t_f + t_0$ to $t_f + t_1$.
 
 We have $t_f$ as a 1d array, both real (`front_time`) and grid
 (`front_it`, the index in t at which front passes, over all x).
 
 ```python
-# try this!!
-# N.B. there is an assumption here that r.t, r.z and r.x are
-# 3d arrays. They are redundant in that they repeat over 2 of
-# their axes (r.z, r.x, r.t = np.meshgrid(z, x, t, indexing='ij'))
-
-# z and x coords are the same as before
-zx_coords = np.indices(r.x[valid])[:2]
-
 # get the real start time of the data and the
 # sampling distance in time (dt)
 rt = r.t[valid][0, 0, :]
@@ -294,24 +233,16 @@ dt = rt[1] - rt[0]
 ## data, if it already existed as a 3d rectangular array (which it
 ## doesn't!). The other way to do it would be to compute the
 ## necessary sample indices first and then index the r.t array.
-## This way makes more sense because we care about real output.
+## You shouldn't do it that way because the coords can be negative
+## floats and map_coordinates will handle that properly.
 #
 # start and end times (s) relative to front passage
 t0 = -5
 t1 = 20
 relative_sample_times = np.arange(t0, t1, dt)
 # extend over x and z
-relative_sample_times = np.tile(relative_sample_times, (rz.size, rx.size, 1))
-
-## Actually, we could do index first with something like this:
-# TODO: check that the output is the same
-i0 = t0 / dt
-i1 = t1 / dt
-relative_indices = np.tile(np.arange(t0, t1), (r.t[valid].shape[:2], 1))
-t_coords = front_it[None, ..., None] + relative_indices
-coords = np.concatenate((zx_coords, t_coords[None]), axis=0)
-relative_sample_times = r.t[valid][coords]
-T_ = relative_sample_times
+sz, sx, = r.t[valid].shape[:2]
+relative_sample_times = np.tile(relative_sample_times, (sz, sx, 1))
 
 ## now compute the times at which we need to sample the 
 ## original data to get front relative data by adding
@@ -324,17 +255,24 @@ rtf = front_time[None, ..., None] + relative_sample_times
 # the start of the data).
 t_coords = (rtf - rt[0]) / dt
 
+# z and x coords are the same as before
+zx_coords = np.indices(t_coords.shape)[:2]
+
 # required shape of the coordinates array is (3, rz.size, rx.size, rt.size)
 coords = np.concatenate((zx_coords, t_coords[None]), axis=0)
 
-X_ = r.x[valid]
-Z_ = r.z[valid]
+st = t_coords.shape[-1]
+X_ = r.x[valid][:, :, 0, None].repeat(st, axis=-1)
+Z_ = r.z[valid][:, :, 0, None].repeat(st, axis=-1)
 T_ = relative_sample_times
 W_ = ndi.map_coordinates(r.w[valid], coords)
+
+# N.B. there is an assumption here that r.t, r.z and r.x are
+# 3d arrays. They are redundant in that they repeat over 2 of
+# their axes (r.z, r.x, r.t = np.meshgrid(z, x, t, indexing='ij'))
 ```
 
-This plot should look the same as that produced from the griddata 
-procedure above.
+Now we can plot, e.g. the front relative mean:
 
 ```python
 # front relative example
@@ -358,51 +296,4 @@ axes[2].set_xlabel('time after front passage (s)')
 c0 = axes[0].contourf(T_[example_fr_tx], X_[example_fr_tx], W_[example_fr_tx], levels=w_levels)
 c1 = axes[1].contourf(T_[example_fr_tz], Z_[example_fr_tz], W_[example_fr_tz], levels=w_levels)
 c2 = axes[2].contourf(T_[example_fr_tz], Z_[example_fr_tz], W_bar, levels=w_levels)
-```
-
-```python
-# real coordinates
-rx = r.x[valid][0, :, 0]
-rz = r.z[valid][:, 0, 0]
-rt = r.t[valid][0, 0, :]
-
-# spacings
-dx = rx[1] - rx[0]
-dz = rz[1] - rz[0]
-dt = rt[1] - rt[0]
-
-# grid coordinates (or np.indices(rx.shape))
-gx = (rx - rx[0]) / dx
-gz = (rz - rz[0]) / dz
-gt = (rt - rt[0]) / dt
-
-# start and end times (s) relative to front passage
-t0 = -5
-t1 = 20
-sample_times = np.arange(t0, t1, dt)
-# reshape for broadcasting
-sample_times = np.repeat(sample_times[None, ...], rx.size, axis=0)
-
-# real time sampling coordinates relative to front passage
-rtf = front_time[..., None] + sample_times
-
-# grid time sampling coordinates relative to front passage
-gtf = (rtf - rt[0]) / dt
-
-# required shape of the coordinates array is (3, rz.size, rx.size, rt.size)
-# extend gtf over z
-gtfa = np.repeat(gtf[None], rz.size, axis=0)
-# extend gx, gz
-gxa = gx[None, ..., None] * np.ones(gtfa.shape)
-gza = gz[..., None, None] * np.ones(gtfa.shape)
-
-coords = np.concatenate((gza[None], gxa[None], gtfa[None]), axis=0)
-
-W_ = ndi.map_coordinates(r.w[valid], coords)
-```
-
-TODO: expose the x, z, t coordinates as X_, Z_, T_
-
-```python
-contourf(W_[:, 50, :], 100, levels=w_levels)
 ```
