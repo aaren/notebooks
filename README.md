@@ -11,3 +11,5 @@ Look at any given notebook using the nbviewer. Links below:
 [Statistics of piv data](http://nbviewer.ipython.org/github/aaren/notebooks/blob/master/piv_data_pdf.ipynb)
 
 [Work to 11th March](http://nbviewer.ipython.org/github/aaren/notebooks/blob/master/work_20140310.ipynb)
+
+[Estimating the distribution of velocities](http://nbviewer.ipython.org/github/aaren/notebooks/blob/master/2d_pdf.ipynb)
